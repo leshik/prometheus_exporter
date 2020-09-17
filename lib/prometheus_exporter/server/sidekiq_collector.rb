@@ -2,75 +2,74 @@
 
 module PrometheusExporter::Server
   class SidekiqCollector < TypeCollector
+    MAX_SIDEKIQ_METRIC_AGE = 60
+
+    SIDEKIQ_SUMS = {
+      'job_duration_seconds' => 'Total time spent in sidekiq jobs.',
+    }.freeze
+
+    SIDEKIQ_COUNTERS = {
+      'jobs_total' => 'Total number of sidekiq jobs executed.',
+      'restarted_jobs_total' => 'Total number of sidekiq jobs that we restarted because of a sidekiq shutdown.',
+      'failed_jobs_total' => 'Total number of failed sidekiq jobs.',
+      'dead_jobs_total' => 'Total number of dead sidekiq jobs.',
+    }.freeze
+
+    attr_reader :sidekiq_metrics
 
     def initialize
-      @sidekiq_jobs_total = nil
-      @sidekiq_job_duration_seconds = nil
-      @sidekiq_jobs_total = nil
-      @sidekiq_restarted_jobs_total = nil
-      @sidekiq_failed_jobs_total = nil
-      @sidekiq_dead_jobs_total = nil
+      @sidekiq_metrics = []
     end
 
     def type
-      "sidekiq"
-    end
-
-    def collect(obj)
-      default_labels = { job_name: obj['name'] }
-      custom_labels = obj['custom_labels']
-      labels = custom_labels.nil? ? default_labels : default_labels.merge(custom_labels)
-
-      ensure_sidekiq_metrics
-      if obj["dead"]
-        @sidekiq_dead_jobs_total.observe(1, labels)
-      else
-        @sidekiq_job_duration_seconds.observe(obj["duration"], labels)
-        @sidekiq_jobs_total.observe(1, labels)
-        @sidekiq_restarted_jobs_total.observe(1, labels) if obj["shutdown"]
-        @sidekiq_failed_jobs_total.observe(1, labels) if !obj["success"] && !obj["shutdown"]
-      end
+      'sidekiq'
     end
 
     def metrics
-      if @sidekiq_jobs_total
-        [
-          @sidekiq_job_duration_seconds,
-          @sidekiq_jobs_total,
-          @sidekiq_restarted_jobs_total,
-          @sidekiq_failed_jobs_total,
-          @sidekiq_dead_jobs_total,
-        ]
-      else
-        []
+      return [] if sidekiq_metrics.length == 0
+
+      metrics = {}
+
+      sidekiq_metrics.map do |metric|
+        labels = metric.fetch('labels', {})
+
+        SIDEKIQ_SUMS.map do |name, help|
+          if (value = metric[name])
+            sum = metrics[name] ||= PrometheusExporter::Metric::Summary.new("sidekiq_#{name}", help)
+            sum.observe(value, labels)
+          end
+        end
+
+        SIDEKIQ_COUNTERS.map do |name, help|
+          if (value = metric[name])
+            counter = metrics[name] ||= PrometheusExporter::Metric::Counter.new("sidekiq_#{name}", help)
+            counter.observe(value, labels)
+          end
+        end
       end
+
+      metrics.values
     end
 
-    protected
+    def collect(obj)
+      metrics = {}
+      now = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
 
-    def ensure_sidekiq_metrics
-      if !@sidekiq_jobs_total
+      metrics['created_at'] = now
+      metrics['labels'] = { job_name: obj['name'] }
+      metrics['labels'].merge!(obj.fetch('custom_labels', {}))
 
-        @sidekiq_job_duration_seconds =
-        PrometheusExporter::Metric::Summary.new(
-          "sidekiq_job_duration_seconds", "Total time spent in sidekiq jobs.")
-
-        @sidekiq_jobs_total =
-        PrometheusExporter::Metric::Counter.new(
-          "sidekiq_jobs_total", "Total number of sidekiq jobs executed.")
-
-        @sidekiq_restarted_jobs_total =
-        PrometheusExporter::Metric::Counter.new(
-          "sidekiq_restarted_jobs_total", "Total number of sidekiq jobs that we restarted because of a sidekiq shutdown.")
-
-        @sidekiq_failed_jobs_total =
-        PrometheusExporter::Metric::Counter.new(
-          "sidekiq_failed_jobs_total", "Total number of failed sidekiq jobs.")
-
-        @sidekiq_dead_jobs_total =
-        PrometheusExporter::Metric::Counter.new(
-          "sidekiq_dead_jobs_total", "Total number of dead sidekiq jobs.")
+      if obj['dead']
+        metrics['dead_jobs_total'] = 1
+      else
+        metrics['job_duration_seconds'] = obj['duration']
+        metrics['jobs_total'] = 1
+        metrics['restarted_jobs_total'] = 1 if obj['shutdown']
+        metrics['failed_jobs_total'] = 1 if !obj['success'] && !obj['shutdown']
       end
+
+      sidekiq_metrics.delete_if { |metric| metric['created_at'] + MAX_SIDEKIQ_METRIC_AGE < now }
+      sidekiq_metrics << metrics
     end
   end
 end
