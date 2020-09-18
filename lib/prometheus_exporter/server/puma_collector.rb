@@ -3,6 +3,7 @@
 module PrometheusExporter::Server
   class PumaCollector < TypeCollector
     MAX_PUMA_METRIC_AGE = 60
+
     PUMA_GAUGES = {
       workers_total: "Number of puma workers.",
       booted_workers_total: "Number of puma workers booted.",

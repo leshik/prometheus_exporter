@@ -3,6 +3,7 @@
 module PrometheusExporter::Server
   class ActiveRecordCollector < TypeCollector
     MAX_ACTIVERECORD_METRIC_AGE = 60
+
     ACTIVE_RECORD_GAUGES = {
       connections: "Total connections in pool",
       busy: "Connections in use in pool",

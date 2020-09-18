@@ -2,7 +2,7 @@
 
 module PrometheusExporter::Server
   class SidekiqCollector < TypeCollector
-    MAX_SIDEKIQ_METRIC_AGE = 60
+    MAX_SIDEKIQ_METRIC_AGE = 28800
 
     SIDEKIQ_SUMS = {
       'job_duration_seconds' => 'Total time spent in sidekiq jobs.',

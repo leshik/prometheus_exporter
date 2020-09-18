@@ -2,7 +2,7 @@
 
 module PrometheusExporter::Server
   class WebCollector < TypeCollector
-    MAX_WEB_METRIC_AGE = 60
+    MAX_WEB_METRIC_AGE = 28800
 
     WEB_SUMS = {
       'duration_seconds' => 'Time spent in HTTP reqs in seconds.',
