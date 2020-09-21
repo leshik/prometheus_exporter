@@ -2,33 +2,49 @@
 
 module PrometheusExporter::Server
   class SidekiqCollector < TypeCollector
+    MAX_SIDEKIQ_METRIC_AGE = 86400
 
     def initialize
+      @history = {}
       @sidekiq_jobs_total = nil
       @sidekiq_job_duration_seconds = nil
-      @sidekiq_jobs_total = nil
       @sidekiq_restarted_jobs_total = nil
       @sidekiq_failed_jobs_total = nil
       @sidekiq_dead_jobs_total = nil
     end
 
     def type
-      "sidekiq"
+      'sidekiq'
     end
 
     def collect(obj)
-      default_labels = { job_name: obj['name'] }
-      custom_labels = obj['custom_labels']
-      labels = custom_labels.nil? ? default_labels : default_labels.merge(custom_labels)
+      now = ::Process.clock_gettime(::Process::CLOCK_MONOTONIC)
+
+      labels = { job_name: obj['name'] }
+      labels.merge!(obj.fetch('custom_labels', {}))
+
+      @history[labels] = now
 
       ensure_sidekiq_metrics
-      if obj["dead"]
+
+      if obj['dead']
         @sidekiq_dead_jobs_total.observe(1, labels)
       else
-        @sidekiq_job_duration_seconds.observe(obj["duration"], labels)
+        @sidekiq_job_duration_seconds.observe(obj['duration'], labels)
         @sidekiq_jobs_total.observe(1, labels)
-        @sidekiq_restarted_jobs_total.observe(1, labels) if obj["shutdown"]
-        @sidekiq_failed_jobs_total.observe(1, labels) if !obj["success"] && !obj["shutdown"]
+        @sidekiq_restarted_jobs_total.observe(1, labels) if obj['shutdown']
+        @sidekiq_failed_jobs_total.observe(1, labels) if !obj['success'] && !obj['shutdown']
+      end
+
+      @history.each_pair do |l, t|
+        if t + MAX_SIDEKIQ_METRIC_AGE < now
+          @sidekiq_jobs_total.remove(l)
+          @sidekiq_job_duration_seconds.remove(l)
+          @sidekiq_restarted_jobs_total.remove(l)
+          @sidekiq_failed_jobs_total.remove(l)
+          @sidekiq_dead_jobs_total.remove(l)
+          @history.delete(l)
+        end
       end
     end
 
@@ -50,26 +66,20 @@ module PrometheusExporter::Server
 
     def ensure_sidekiq_metrics
       if !@sidekiq_jobs_total
+        @sidekiq_job_duration_seconds = PrometheusExporter::Metric::Summary.new(
+          'sidekiq_job_duration_seconds', 'Total time spent in sidekiq jobs.')
 
-        @sidekiq_job_duration_seconds =
-        PrometheusExporter::Metric::Summary.new(
-          "sidekiq_job_duration_seconds", "Total time spent in sidekiq jobs.")
+        @sidekiq_jobs_total = PrometheusExporter::Metric::Counter.new(
+          'sidekiq_jobs_total', 'Total number of sidekiq jobs executed.')
 
-        @sidekiq_jobs_total =
-        PrometheusExporter::Metric::Counter.new(
-          "sidekiq_jobs_total", "Total number of sidekiq jobs executed.")
+        @sidekiq_restarted_jobs_total = PrometheusExporter::Metric::Counter.new(
+          'sidekiq_restarted_jobs_total', 'Total number of sidekiq jobs that we restarted because of a sidekiq shutdown.')
 
-        @sidekiq_restarted_jobs_total =
-        PrometheusExporter::Metric::Counter.new(
-          "sidekiq_restarted_jobs_total", "Total number of sidekiq jobs that we restarted because of a sidekiq shutdown.")
+        @sidekiq_failed_jobs_total = PrometheusExporter::Metric::Counter.new(
+          'sidekiq_failed_jobs_total', 'Total number of failed sidekiq jobs.')
 
-        @sidekiq_failed_jobs_total =
-        PrometheusExporter::Metric::Counter.new(
-          "sidekiq_failed_jobs_total", "Total number of failed sidekiq jobs.")
-
-        @sidekiq_dead_jobs_total =
-        PrometheusExporter::Metric::Counter.new(
-          "sidekiq_dead_jobs_total", "Total number of dead sidekiq jobs.")
+        @sidekiq_dead_jobs_total = PrometheusExporter::Metric::Counter.new(
+          'sidekiq_dead_jobs_total', 'Total number of dead sidekiq jobs.')
       end
     end
   end
